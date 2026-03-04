@@ -1,0 +1,11 @@
+{
+  "vip_users": ["ivanov", "petrov", "sidorov"],
+  "default": [
+    "ip1:port1",
+    "ip2:port2"
+  ],
+  "vip": [
+    "10.0.0.1:8080",
+    "10.0.0.2:8080"
+  ]
+}
