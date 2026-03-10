@@ -98,22 +98,21 @@ def load_proxies_for_user(username: str) -> list:
     return []
 
 
-def get_next_proxy(username: str, index_store: dict) -> str:
-    """Получает следующий прокси с равномерным распределением"""
+def get_next_proxy(username: str) -> str:
+    """Получает следующий прокси с равномерным распределением (общий индекс для всех)"""
+    global current_proxy_index
+    
     proxies = load_proxies_for_user(username)
     if not proxies:
         return "Нет доступных прокси"
     
-    if username not in index_store:
-        index_store[username] = 0
-    
-    proxy = proxies[index_store[username]]
-    index_store[username] = (index_store[username] + 1) % len(proxies)
+    proxy = proxies[current_proxy_index]
+    current_proxy_index = (current_proxy_index + 1) % len(proxies)
     return proxy
 
 
-# Хранилище индексов прокси для каждого пользователя
-proxy_indices = {}
+# Общий индекс прокси для всех пользователей
+current_proxy_index = 0
 
 
 async def send_rating_request(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -205,7 +204,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     
     # Выдача прокси
     if query.data == 'new_proxy':
-        proxy = get_next_proxy(username, proxy_indices)
+        proxy = get_next_proxy(username)
         
         # Обновляем данные пользователя
         user_data = get_user_data(user_id)
@@ -248,7 +247,7 @@ async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user_id = user.id
     username = user.username or ''
     
-    proxy = get_next_proxy(username, proxy_indices)
+    proxy = get_next_proxy(username)
     
     # Обновляем данные
     user_data = get_user_data(user_id)
