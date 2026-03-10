@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "docker build": true,
+        "/^python -c \"import telegram, telegram\\.ext; print\\('telegram ok'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
+        }
+    }
+}

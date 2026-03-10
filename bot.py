@@ -283,7 +283,12 @@ async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 def main() -> None:
     """Запуск бота"""
-    application = Application.builder().token("YOUR_BOT_TOKEN").build()
+    token = os.environ.get('BOT_TOKEN', '')
+    if not token or token == 'YOUR_BOT_TOKEN':
+        logger.error("Не задан токен бота! Установите переменную окружения BOT_TOKEN")
+        return
+    
+    application = Application.builder().token(token).build()
     
     # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))

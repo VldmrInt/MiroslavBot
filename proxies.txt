@@ -1,2 +1,0 @@
-https://t.me/socks?server=141.8.198.84&port=12335&user=user3&pass=passStrong123
-tg://proxy?server=91.186.213.221&port=443&secret=eee7fe56a3eafbd5e2d0ad160e46526b906769746875622e636f6d

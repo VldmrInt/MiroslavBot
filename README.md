@@ -64,6 +64,54 @@ python bot.py
 
 Через сутки после получения прокси бот спросит оценку работы.
 
+## Запуск через Docker
+
+### Сборка образа
+
+```bash
+docker build -t telegram-proxy-bot .
+```
+
+### Запуск контейнера
+
+```bash
+docker run -e BOT_TOKEN="ваш_токен" telegram-proxy-bot
+```
+
+### Использование Docker Compose
+
+Создайте файл `docker-compose.yml`:
+
+```yaml
+version: '3.8'
+services:
+  bot:
+    build: .
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+    volumes:
+      - ./data:/app/data
+      - ./proxies:/app/proxies
+      - ./images:/app/images
+```
+
+Запустите:
+
+```bash
+docker-compose up
+```
+
+### Переменные окружения
+
+- `BOT_TOKEN` — токен вашего Telegram-бота (обязательно)
+
+### Тома (Volumes)
+
+Для сохранения данных между перезапусками монтируются:
+- `./data` — данные пользователей
+- `./proxies` — конфигурация прокси
+- `./images` — картинки инструкций
+
 ## Логи
 
 Все запросы сохраняются в файл `bot.log`.

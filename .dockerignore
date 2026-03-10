@@ -1,0 +1,39 @@
+# Исключаем виртуальные среды
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Исключаем логи и временные файлы
+bot.log
+*.log
+*.tmp
+*.temp
+
+# Исключаем конфиденциальные данные
+*.key
+*.pem
+*.secret
+
+# Исключаем системные файлы
+.DS_Store
+Thumbs.db
+
+# Исключаем IDE файлы
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Исключаем тестовые данные
+test/
+tests/
+
+# Исключаем сам Dockerfile и docker-compose (опционально)
+# Dockerfile
+# docker-compose.yml
