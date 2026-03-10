@@ -180,7 +180,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик нажатий на кнопки"""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"Ошибка ответа на callback: {e}")
+        return
+    
     user = query.from_user
     user_id = user.id
     username = user.username or ''
@@ -188,15 +194,18 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Обработка оценки
     if query.data.startswith('rating_'):
         rating = query.data.split('_')[1]
-        if rating == 'good':
-            await query.edit_message_text("Спасибо! Рады, что всё работает! ✅")
-            logger.info(f"Пользователь {user_id} оценил прокси как отличный")
-        elif rating == 'ok':
-            await query.edit_message_text("Хорошо, будем стараться лучше! 👍")
-            logger.info(f"Пользователь {user_id} оценил прокси как хороший")
-        elif rating == 'bad':
-            await query.edit_message_text("Приносим извинения. Попробуйте получить новый прокси! 🔄")
-            logger.info(f"Пользователь {user_id} оценил прокси как плохой")
+        try:
+            if rating == 'good':
+                await query.edit_message_text("Спасибо! Рады, что всё работает! ✅")
+                logger.info(f"Пользователь {user_id} оценил прокси как отличный")
+            elif rating == 'ok':
+                await query.edit_message_text("Хорошо, будем стараться лучше! 👍")
+                logger.info(f"Пользователь {user_id} оценил прокси как хороший")
+            elif rating == 'bad':
+                await query.edit_message_text("Приносим извинения. Попробуйте получить новый прокси! 🔄")
+                logger.info(f"Пользователь {user_id} оценил прокси как плохой")
+        except Exception as e:
+            logger.warning(f"Ошибка обновления сообщения оценки: {e}")
         
         # Обновляем флаг, что оценка получена
         update_user_data(user_id, rating_asked=True)
@@ -222,7 +231,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         keyboard = [[InlineKeyboardButton("Получить новый прокси", callback_data='new_proxy')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(text=f"Ваш прокси: {proxy}", reply_markup=reply_markup)
+        try:
+            await query.edit_message_text(text=f"Ваш прокси: {proxy}", reply_markup=reply_markup)
+        except Exception as e:
+            logger.warning(f"Ошибка обновления сообщения: {e}")
+            return
 
         # Если это первый прокси - отправляем инструкции
         if proxy_count == 1:
