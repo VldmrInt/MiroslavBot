@@ -19,12 +19,7 @@ pip install -r requirements.txt
 
 2. Создайте файл `proxies/users.json` с настройками прокси (см. раздел ниже).
 
-3. (Опционально) Установите Telegram ID владельца (OWNER) для управления списками VIP и прокси:
-```
-export OWNER_USER_ID="123456789"
-```
-
-4. Установите токен бота через переменную окружения:
+3. Установите токен бота через переменную окружения:
 ```
 export BOT_TOKEN="ваш_токен_бота"
 ```
@@ -88,19 +83,34 @@ python bot.py
 
 Через сутки после получения прокси бот спросит оценку работы.
 
-## Команды владельца (только для OWNER_USER_ID)
+## Запуск без Docker (в фоне)
 
-Если задана переменная окружения `OWNER_USER_ID`, то этот Telegram-аккаунт может управлять списками прокси прямо через бота:
+### Linux / macOS
+Запустите бота в фоне с помощью `nohup` или `&`:
 
-- `/add_vip <username>` — добавить пользователя в VIP (получает VIP-прокси)
-- `/remove_vip <username>` — удалить пользователя из VIP
-- `/add_proxy <host:port>` — добавить обычный прокси в список `default`
-- `/remove_proxy <host:port>` — удалить прокси из списка `default`
-- `/add_vip_proxy <host:port>` — добавить прокси в список `vip`
-- `/remove_vip_proxy <host:port>` — удалить прокси из списка `vip`
-- `/list_proxies` — показать текущие списки VIP-пользователей, обычных и VIP-прокси
+```bash
+BOT_TOKEN="ваш_токен" nohup python3 bot.py > bot.log 2>&1 &
+```
 
-> Все изменения сохраняются в `proxies/users.json`.
+Остановить можно, найдя PID и убив процесс:
+
+```bash
+ps aux | grep bot.py
+kill <PID>
+```
+
+### Windows (PowerShell)
+Запуск в фоне:
+
+```powershell
+Start-Process -NoNewWindow -FilePath python -ArgumentList "bot.py" -RedirectStandardOutput "bot.log" -RedirectStandardError "bot.log"
+```
+
+Чтобы остановить, найдите процесс и завершите его:
+
+```powershell
+Get-Process python | Where-Object {$_.Path -like "*bot.py*"} | Stop-Process
+```
 
 ## Запуск через Docker
 
