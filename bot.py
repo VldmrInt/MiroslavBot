@@ -54,7 +54,7 @@ def get_user_data(user_id: int) -> dict:
             'proxy_count': 0,
             'last_proxy': None,
             'last_proxy_time': None,
-            'rating_asked': False
+            'rating_job_id': None
         }
         save_users_data(data)
     return data[str(user_id)]
@@ -122,9 +122,9 @@ async def send_rating_request(context: ContextTypes.DEFAULT_TYPE) -> None:
     proxy = job.data['proxy']
     
     keyboard = [
-        [InlineKeyboardButton("⭐ Отлично", callback_data=f'rating_good_{user_id}')],
+        [InlineKeyboardButton("⭐ Плохо", callback_data=f'rating_bad_{user_id}')],
         [InlineKeyboardButton("⭐⭐ Хорошо", callback_data=f'rating_ok_{user_id}')],
-        [InlineKeyboardButton("⭐⭐⭐ Плохо", callback_data=f'rating_bad_{user_id}')]
+        [InlineKeyboardButton("⭐⭐⭐ Отлично", callback_data=f'rating_good_{user_id}')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -208,7 +208,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.warning(f"Ошибка обновления сообщения оценки: {e}")
         
         # Обновляем флаг, что оценка получена
-        update_user_data(user_id, rating_asked=True)
+        update_user_data(user_id, rating_job_id=None)
         return
     
     # Выдача прокси
@@ -241,15 +241,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if proxy_count == 1:
             await send_instructions(user_id, context.bot)
         
-        # Планируем запрос оценки через сутки
+        # Планируем запрос оценки через сутки (только один)
         job_queue = context.application.job_queue
         if job_queue:
+            # Отменяем предыдущий scheduled job для этого пользователя
+            current_jobs = job_queue.jobs()
+            for job in current_jobs:
+                if job.name == f"rating_{user_id}":
+                    job.schedule_removal()
+            
+            # Планируем новый
             run_at = datetime.now() + timedelta(days=1)
             job_queue.run_once(
                 send_rating_request,
                 when=run_at,
                 data={'user_id': user_id, 'proxy': proxy},
-                name=f"rating_{user_id}_{proxy_count}"
+                name=f"rating_{user_id}"
             )
             logger.info(f"Запланирован запрос оценки для {user_id} на {run_at}")
 
@@ -281,15 +288,22 @@ async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if proxy_count == 1:
         await send_instructions(user_id, context.bot)
     
-    # Планируем оценку через сутки
+    # Планируем оценку через сутки (только один)
     job_queue = context.application.job_queue
     if job_queue:
+        # Отменяем предыдущий scheduled job для этого пользователя
+        current_jobs = job_queue.jobs()
+        for job in current_jobs:
+            if job.name == f"rating_{user_id}":
+                job.schedule_removal()
+        
+        # Планируем новый
         run_at = datetime.now() + timedelta(days=1)
         job_queue.run_once(
             send_rating_request,
             when=run_at,
             data={'user_id': user_id, 'proxy': proxy},
-            name=f"rating_{user_id}_{proxy_count}"
+            name=f"rating_{user_id}"
         )
 
 
