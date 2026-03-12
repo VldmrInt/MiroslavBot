@@ -4,6 +4,10 @@
         "/^python -c \"import telegram, telegram\\.ext; print\\('telegram ok'\\)\"$/": {
             "approve": true,
             "matchCommandLine": true
+        },
+        "/^python -c \"import bot; print\\('ok'\\)\"$/": {
+            "approve": true,
+            "matchCommandLine": true
         }
     }
 }

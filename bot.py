@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, JobQueue
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # Настройка логирования
 logging.basicConfig(
@@ -53,8 +53,7 @@ def get_user_data(user_id: int) -> dict:
             'username': '',
             'proxy_count': 0,
             'last_proxy': None,
-            'last_proxy_time': None,
-            'rating_job_id': None
+            'last_proxy_time': None
         }
         save_users_data(data)
     return data[str(user_id)]
@@ -206,9 +205,6 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.info(f"Пользователь {user_id} оценил прокси как плохой")
         except Exception as e:
             logger.warning(f"Ошибка обновления сообщения оценки: {e}")
-        
-        # Обновляем флаг, что оценка получена
-        update_user_data(user_id, rating_job_id=None)
         return
     
     # Выдача прокси
