@@ -10,18 +10,11 @@ COPY requirements.txt .
 # Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Создаём непривилегированного пользователя и необходимые директории
-RUN useradd --no-create-home --shell /bin/false botuser
-
 # Копируем исходный код
-COPY --chown=botuser:botuser . .
+COPY . .
 
-# Создаём директории с правильными правами (после COPY, чтобы не затереть содержимое)
-RUN mkdir -p proxies images data \
-    && chown -R botuser:botuser /app
-
-# Переключаемся на непривилегированного пользователя
-USER botuser
+# Создаём директории с правильными правами
+RUN mkdir -p proxies images data
 
 # Переменная окружения для токена бота
 ENV BOT_TOKEN=""
