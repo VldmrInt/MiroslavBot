@@ -5,7 +5,8 @@
 ## Возможности
 
 - ✅ Выдача прокси с равномерным распределением
-- ✅ Сегментация пользователей по никнейму (персональные списки прокси)
+- ✅ VIP-список прокси для выбранных пользователей (по Telegram username)
+- ✅ Независимые счётчики раздачи для VIP и обычных пользователей
 - ✅ Логирование всех запросов
 - ✅ Напоминание об оценке через сутки
 - ✅ Инструкции после первого получения прокси
@@ -13,14 +14,14 @@
 ## Установка
 
 1. Установите зависимости:
-```
+```bash
 pip install -r requirements.txt
 ```
 
 2. Создайте файл `proxies/users.json` с настройками прокси (см. раздел ниже).
 
 3. Установите токен бота через переменную окружения:
-```
+```bash
 export BOT_TOKEN="ваш_токен_бота"
 ```
 
@@ -45,6 +46,9 @@ export BOT_TOKEN="ваш_токен_бота"
 - `vip_users` — список username, которые получают VIP-прокси (например, `ivanov`)
 - `default` — прокси для обычных пользователей
 - `vip` — прокси для VIP-пользователей
+
+VIP- и обычные пользователи используют **независимые** счётчики раздачи, поэтому
+запросы одной группы не влияют на очерёдность в другой.
 
 ### Примеры
 
@@ -72,7 +76,7 @@ export BOT_TOKEN="ваш_токен_бота"
 ## Использование
 
 Запустите бота:
-```
+```bash
 python bot.py
 ```
 
@@ -86,7 +90,7 @@ python bot.py
 ## Запуск без Docker (в фоне)
 
 ### Linux / macOS
-Запустите бота в фоне с помощью `nohup` или `&`:
+Запустите бота в фоне с помощью `nohup`:
 
 ```bash
 BOT_TOKEN="ваш_токен" nohup python3 bot.py > bot.log 2>&1 &
@@ -114,44 +118,46 @@ Get-Process python | Where-Object {$_.Path -like "*bot.py*"} | Stop-Process
 
 ## Запуск через Docker
 
-### Сборка образа
+### Быстрый старт (Docker Compose)
+
+1. Скопируйте `.env.example` в `.env` и укажите токен бота:
+```bash
+cp .env.example .env
+# Отредактируйте .env, вставив ваш BOT_TOKEN
+```
+
+2. Запустите:
+```bash
+docker compose up -d
+```
+
+3. Посмотреть логи:
+```bash
+docker compose logs -f
+```
+
+4. Остановить:
+```bash
+docker compose down
+```
+
+### Сборка и запуск вручную
 
 ```bash
 docker build -t telegram-proxy-bot .
-```
-
-### Запуск контейнера
-
-```bash
-docker run -e BOT_TOKEN="ваш_токен" telegram-proxy-bot
-```
-
-### Использование Docker Compose
-
-Создайте файл `docker-compose.yml`:
-
-```yaml
-version: '3.8'
-services:
-  bot:
-    build: .
-    environment:
-      - BOT_TOKEN=${BOT_TOKEN}
-    volumes:
-      - ./data:/app/data
-      - ./proxies:/app/proxies
-      - ./images:/app/images
-```
-
-Запустите:
-
-```bash
-docker-compose up
+docker run -d --restart unless-stopped \
+  -e BOT_TOKEN="ваш_токен" \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/proxies:/app/proxies \
+  -v $(pwd)/images:/app/images \
+  telegram-proxy-bot
 ```
 
 ### Переменные окружения
 
-- `BOT_TOKEN` — токен вашего Telegram-бота (обязательно)
+| Переменная | Описание | Обязательна |
+|------------|----------|-------------|
+| `BOT_TOKEN` | Токен вашего Telegram-бота | Да |
 
 ### Тома (Volumes)
 
