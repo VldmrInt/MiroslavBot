@@ -128,17 +128,17 @@ cp .env.example .env
 
 2. Запустите:
 ```bash
-docker compose up -d
+docker-compose up -d
 ```
 
 3. Посмотреть логи:
 ```bash
-docker compose logs -f
+docker-compose logs -f
 ```
 
 4. Остановить:
 ```bash
-docker compose down
+docker-compose down
 ```
 
 ### Сборка и запуск вручную
