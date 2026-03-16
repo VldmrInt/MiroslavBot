@@ -134,9 +134,6 @@ async def _issue_proxy(
 
     logger.info(f"Пользователь {username} ({user_id}) получил прокси: {proxy} (запрос #{proxy_count})")
 
-    if proxy_count == 1:
-        await send_instructions(user_id, context.bot)
-
     return proxy, proxy_count
 
 
@@ -260,7 +257,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = user.id
     username = user.username or ''
 
-    # Подтверждение предупреждения — показываем кнопку получения прокси
+    # Подтверждение предупреждения — показываем инструкции и кнопку получения прокси
     if query.data == 'acknowledge_proxy':
         keyboard = [[InlineKeyboardButton("Получить прокси", callback_data='new_proxy')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -271,6 +268,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
         except Exception as e:
             logger.warning(f"Ошибка обновления сообщения после подтверждения: {e}")
+        await send_instructions(user_id, context.bot)
         return
 
     # Выдача прокси
