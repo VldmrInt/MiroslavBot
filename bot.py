@@ -257,18 +257,23 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = user.id
     username = user.username or ''
 
-    # Подтверждение предупреждения — показываем инструкции и кнопку получения прокси
+    # Подтверждение предупреждения — показываем инструкции, затем кнопку получения прокси
     if query.data == 'acknowledge_proxy':
-        keyboard = [[InlineKeyboardButton("Получить прокси", callback_data='new_proxy')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         try:
-            await query.edit_message_text(
-                text='Добро пожаловать! Нажмите кнопку, чтобы получить прокси.',
-                reply_markup=reply_markup
-            )
+            await query.edit_message_text(text='Добро пожаловать!')
         except Exception as e:
             logger.warning(f"Ошибка обновления сообщения после подтверждения: {e}")
         await send_instructions(user_id, context.bot)
+        keyboard = [[InlineKeyboardButton("Получить прокси", callback_data='new_proxy')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text='Нажмите кнопку, чтобы получить прокси.',
+                reply_markup=reply_markup
+            )
+        except Exception as e:
+            logger.warning(f"Ошибка отправки кнопки получения прокси: {e}")
         return
 
     # Выдача прокси
