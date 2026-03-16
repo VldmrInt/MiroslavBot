@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import json
 import os
@@ -258,28 +257,38 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = user.id
     username = user.username or ''
 
-    # Подтверждение предупреждения — инструкции, затем через 5 сек первый прокси
+    # Показываем инструкции и кнопку "Я прочитал"
     if query.data == 'acknowledge_proxy':
         try:
             await query.edit_message_text(text='Добро пожаловать!')
         except Exception as e:
             logger.warning(f"Ошибка обновления сообщения после подтверждения: {e}")
         await send_instructions(user_id, context.bot)
-        await asyncio.sleep(5)
-        proxy, proxy_count = await _issue_proxy(user_id, username, context)
-        keyboard = [[InlineKeyboardButton("Получить новый прокси", callback_data='new_proxy')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        keyboard = [[InlineKeyboardButton("✅ Я прочитал", callback_data='read_instructions')]]
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Ваш прокси: {proxy}",
-                reply_markup=reply_markup
+                text='Прочитайте инструкцию выше и нажмите кнопку.',
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         except Exception as e:
-            logger.warning(f"Ошибка отправки прокси: {e}")
+            logger.warning(f"Ошибка отправки кнопки 'Я прочитал': {e}")
         return
 
-    # Выдача прокси
+    # Пользователь прочитал инструкцию — выдаём первый прокси
+    if query.data == 'read_instructions':
+        proxy, _ = await _issue_proxy(user_id, username, context)
+        keyboard = [[InlineKeyboardButton("Получить новый прокси", callback_data='new_proxy')]]
+        try:
+            await query.edit_message_text(
+                text=f"Ваш прокси: {proxy}",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            logger.warning(f"Ошибка отправки прокси после инструкции: {e}")
+        return
+
+    # Выдача нового прокси
     if query.data == 'new_proxy':
         proxy, proxy_count = await _issue_proxy(user_id, username, context)
 
