@@ -1,7 +1,7 @@
 import logging
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
@@ -119,7 +119,7 @@ async def _issue_proxy(
     username: str,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> tuple[str, int]:
-    """Выдаёт прокси, обновляет статистику пользователя и планирует запрос оценки.
+    """Выдаёт прокси, обновляет статистику пользователя.
 
     Возвращает кортеж (proxy, proxy_count).
     """
@@ -139,46 +139,7 @@ async def _issue_proxy(
     if proxy_count == 1:
         await send_instructions(user_id, context.bot)
 
-    job_queue = context.application.job_queue
-    if job_queue:
-        for job in job_queue.jobs():
-            if job.name == f"rating_{user_id}":
-                job.schedule_removal()
-
-        run_at = datetime.now() + timedelta(days=1)
-        job_queue.run_once(
-            send_rating_request,
-            when=run_at,
-            data={'user_id': user_id, 'proxy': proxy},
-            name=f"rating_{user_id}",
-        )
-        logger.info(f"Запланирован запрос оценки для {user_id} на {run_at}")
-
     return proxy, proxy_count
-
-
-async def send_rating_request(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отправляет запрос на оценку прокси через сутки"""
-    job = context.job
-    user_id = job.data['user_id']
-    proxy = job.data['proxy']
-    
-    keyboard = [
-        [InlineKeyboardButton("⭐ Плохо", callback_data=f'rating_bad_{user_id}')],
-        [InlineKeyboardButton("⭐⭐ Хорошо", callback_data=f'rating_ok_{user_id}')],
-        [InlineKeyboardButton("⭐⭐⭐ Отлично", callback_data=f'rating_good_{user_id}')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    try:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=f"Как работает прокси {proxy}? Оцените качество:",
-            reply_markup=reply_markup
-        )
-        logger.info(f"Запрос оценки отправлен пользователю {user_id}")
-    except Exception as e:
-        logger.error(f"Не удалось отправить запрос оценки {user_id}: {e}")
 
 
 async def send_instructions(user_id: int, bot) -> None:
@@ -202,54 +163,57 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     user_id = user.id
     username = user.username or ''
-    
+
     # Сохраняем никнейм
-    user_data = get_user_data(user_id)
-    user_data['username'] = username
+    get_user_data(user_id)
     update_user_data(user_id, username=username)
-    
-    keyboard = [[InlineKeyboardButton("Получить прокси", callback_data='new_proxy')]]
+
+    keyboard = [[InlineKeyboardButton("✅ Понятно, продолжить", callback_data='acknowledge_proxy')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    
+
     await update.message.reply_text(
-        'Добро пожаловать! Нажмите кнопку, чтобы получить прокси.',
+        '⚠️ Важно!\n\n'
+        'Прокси работает только с приложением Telegram:\n'
+        '• Windows\n'
+        '• Linux\n'
+        '• macOS\n'
+        '• Android\n'
+        '• iOS\n\n'
+        '❌ Прокси НЕ работает с web-версией Telegram (web.telegram.org).\n\n'
+        'Нажмите кнопку ниже, чтобы продолжить.',
         reply_markup=reply_markup
     )
-    
+
     logger.info(f"Пользователь {username} ({user_id}) начал работу с ботом")
 
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Обработчик нажатий на кнопки"""
     query = update.callback_query
-    
+
     try:
         await query.answer()
     except Exception as e:
         logger.warning(f"Ошибка ответа на callback: {e}")
         return
-    
+
     user = query.from_user
     user_id = user.id
     username = user.username or ''
-    
-    # Обработка оценки
-    if query.data.startswith('rating_'):
-        rating = query.data.split('_')[1]
+
+    # Подтверждение предупреждения — показываем кнопку получения прокси
+    if query.data == 'acknowledge_proxy':
+        keyboard = [[InlineKeyboardButton("Получить прокси", callback_data='new_proxy')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         try:
-            if rating == 'good':
-                await query.edit_message_text("Спасибо! Рады, что всё работает! ✅")
-                logger.info(f"Пользователь {user_id} оценил прокси как отличный")
-            elif rating == 'ok':
-                await query.edit_message_text("Хорошо, будем стараться лучше! 👍")
-                logger.info(f"Пользователь {user_id} оценил прокси как хороший")
-            elif rating == 'bad':
-                await query.edit_message_text("Приносим извинения. Попробуйте получить новый прокси! 🔄")
-                logger.info(f"Пользователь {user_id} оценил прокси как плохой")
+            await query.edit_message_text(
+                text='Добро пожаловать! Нажмите кнопку, чтобы получить прокси.',
+                reply_markup=reply_markup
+            )
         except Exception as e:
-            logger.warning(f"Ошибка обновления сообщения оценки: {e}")
+            logger.warning(f"Ошибка обновления сообщения после подтверждения: {e}")
         return
-    
+
     # Выдача прокси
     if query.data == 'new_proxy':
         proxy, proxy_count = await _issue_proxy(user_id, username, context)
