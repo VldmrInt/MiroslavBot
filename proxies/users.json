@@ -1,11 +1,32 @@
 {
   "vip_users": ["ivanov", "petrov", "sidorov"],
   "default": [
-    "ip1:port1",
-    "ip2:port2"
+    {
+      "type": "mtproto",
+      "server": "1.2.3.4",
+      "port": 443,
+      "secret": "ee367f90de5ca35a5939d8b49f5a3e0f62"
+    },
+    {
+      "type": "socks5",
+      "server": "5.6.7.8",
+      "port": 1080,
+      "username": "user",
+      "password": "pass"
+    },
+    "ip1:port1"
   ],
   "vip": [
-    "10.0.0.1:8080",
-    "10.0.0.2:8080"
+    {
+      "type": "mtproto",
+      "server": "10.0.0.1",
+      "port": 443,
+      "secret": "dd1234567890abcdef1234567890abcd"
+    },
+    {
+      "type": "socks5",
+      "server": "10.0.0.2",
+      "port": 1080
+    }
   ]
 }
