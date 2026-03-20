@@ -11,12 +11,16 @@ MiroslavBot — раздача прокси для Telegram.
 собственного подключения к Telegram API (актуально при блокировке в РФ).
 """
 
+import asyncio
 import json
 import logging
 import os
 import sys
+import time
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
+
+import httpx
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.error import NetworkError, TimedOut
@@ -56,10 +60,13 @@ USERS_FILE = os.path.join(DATA_DIR, "users.json")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# Состояние ротации прокси (в памяти; сбрасывается при рестарте)
+# Состояние прокси (в памяти; сбрасывается при рестарте)
 # ---------------------------------------------------------------------------
 
 _proxy_index: int = 0
+_healthy_proxies: list = []  # отсортированы по задержке; пусто до первой проверки
+
+CHECK_INTERVAL = 300  # секунд между проверками
 
 # ---------------------------------------------------------------------------
 # Работа с данными пользователей
@@ -126,9 +133,11 @@ def _load_proxies() -> list:
 
 def _parse_link(link: str):
     """
-    Разбирает ссылку вида:
+    Разбирает ссылки вида:
       https://t.me/socks?server=...&port=...&user=...&pass=...
       https://t.me/proxy?server=...&port=...&secret=...
+      tg://socks?server=...   (альтернативная схема)
+      tg://proxy?server=...   (альтернативная схема)
     Возвращает словарь с компонентами или None при ошибке.
     """
     try:
@@ -139,7 +148,14 @@ def _parse_link(link: str):
             vals = params.get(key)
             return vals[0] if vals else None
 
-        if "/socks" in parsed.path:
+        is_socks = "/socks" in parsed.path or (
+            parsed.scheme == "tg" and parsed.netloc == "socks"
+        )
+        is_proxy = "/proxy" in parsed.path or (
+            parsed.scheme == "tg" and parsed.netloc == "proxy"
+        )
+
+        if is_socks:
             return {
                 "type": "socks5",
                 "server": _get("server"),
@@ -147,7 +163,7 @@ def _parse_link(link: str):
                 "user": _get("user"),
                 "pass": _get("pass"),
             }
-        if "/proxy" in parsed.path:
+        if is_proxy:
             return {
                 "type": "mtproto",
                 "server": _get("server"),
@@ -202,10 +218,85 @@ def _get_bot_proxy():
     return None
 
 
-def _next_proxy():
-    """Выбирает следующий прокси по round-robin. Возвращает ссылку как есть."""
-    global _proxy_index
+async def _check_proxy(link: str) -> tuple[bool, float]:
+    """
+    Проверяет доступность прокси.
+    SOCKS5 — HTTP-запрос к api.telegram.org через прокси.
+    MTProto — TCP-соединение на server:port.
+    Возвращает (доступен, задержка_мс).
+    """
+    info = _parse_link(link)
+    if not info:
+        return False, float("inf")
+
+    server = info.get("server") or ""
+    port = info.get("port") or 0
+
+    if info["type"] == "socks5":
+        socks5_url = _link_to_socks5_url(link)
+        if not socks5_url:
+            return False, float("inf")
+        try:
+            async with httpx.AsyncClient(proxy=socks5_url, timeout=10.0) as client:
+                t0 = time.monotonic()
+                await client.get("https://api.telegram.org")
+                return True, (time.monotonic() - t0) * 1000
+        except Exception:
+            return False, float("inf")
+
+    # mtproto — TCP-соединение
+    if not server or not port:
+        return False, float("inf")
+    try:
+        t0 = time.monotonic()
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(server, port), timeout=5.0
+        )
+        writer.close()
+        return True, (time.monotonic() - t0) * 1000
+    except Exception:
+        return False, float("inf")
+
+
+async def _refresh_proxies() -> None:
+    """
+    Параллельно проверяет все прокси из файла.
+    Обновляет _healthy_proxies — список рабочих, отсортированный по задержке.
+    """
+    global _healthy_proxies, _proxy_index
+
     pool = _load_proxies()
+    if not pool:
+        logger.warning("Список прокси пуст")
+        return
+
+    logger.info("Проверка %d прокси...", len(pool))
+    results = await asyncio.gather(*[_check_proxy(link) for link in pool])
+
+    working = []
+    for link, (ok, latency) in zip(pool, results):
+        if ok:
+            working.append((latency, link))
+        logger.info(
+            "  %-60s  %s",
+            link[:60],
+            f"OK {latency:.0f}ms" if ok else "DEAD",
+        )
+
+    working.sort()
+    _healthy_proxies = [link for _, link in working]
+    _proxy_index = 0
+    logger.info("Доступно прокси: %d / %d", len(_healthy_proxies), len(pool))
+
+
+async def _health_check_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _refresh_proxies()
+
+
+def _next_proxy():
+    """Выбирает следующий прокси по round-robin из рабочих (или всего списка до первой проверки)."""
+    global _proxy_index
+    pool = _healthy_proxies if _healthy_proxies else _load_proxies()
     if not pool:
         return None
     proxy = pool[_proxy_index % len(pool)]
@@ -405,6 +496,9 @@ def main() -> None:
     app.add_handler(CommandHandler("proxy", cmd_proxy))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
+
+    # Первая проверка через 10 сек после старта, затем каждые CHECK_INTERVAL сек
+    app.job_queue.run_repeating(_health_check_job, interval=CHECK_INTERVAL, first=10)
 
     logger.info("Бот запущен%s", f" (прокси: {bot_proxy})" if bot_proxy else "")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
