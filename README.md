@@ -1,12 +1,11 @@
 # MiroslavBot — Telegram Proxy Bot
 
-Бот для раздачи прокси в Telegram с поддержкой VIP-пользователей.
+Бот для раздачи прокси в Telegram.
 
 ## Возможности
 
 - Выдача прокси прямыми ссылками (`https://t.me/socks?...`) — подключение в один клик
-- VIP-список с отдельным пулом прокси (по Telegram username)
-- Независимые счётчики round-robin для VIP и обычных пользователей
+- Равномерное распределение (round-robin) по общему пулу прокси
 - Автоматическое использование SOCKS5-прокси для собственного подключения к Telegram API (работает при блокировке в РФ)
 - Подсказки для пользователей: инструкция по настройке и проверка статуса
 - Логирование всех запросов
@@ -36,38 +35,27 @@ python bot.py
 Все настройки хранятся в `proxies/users.json`:
 
 ```json
-{
-  "vip_users": ["ivanov", "petrov"],
-  "default": [
-    "https://t.me/socks?server=45.150.37.167&port=12335&user=user1&pass=passStrong123",
-    "https://t.me/socks?server=45.150.37.167&port=12336&user=user2&pass=passStrong456"
-  ],
-  "vip": [
-    "https://t.me/socks?server=45.150.37.167&port=12338&user=vip1&pass=vipPass111"
-  ]
-}
+[
+  "https://t.me/socks?server=45.150.37.167&port=12335&user=user1&pass=passStrong123",
+  "https://t.me/socks?server=45.150.37.167&port=12336&user=user2&pass=passStrong456",
+  "https://t.me/socks?server=45.150.37.167&port=12337&user=user3&pass=passStrong789"
+]
 ```
 
-| Поле | Описание |
-|------|----------|
-| `vip_users` | Telegram-username, которые получают VIP-прокси |
-| `default` | Прокси для обычных пользователей |
-| `vip` | Прокси для VIP-пользователей |
+Файл — просто массив ссылок. Прокси раздаются по кругу (round-robin).
 
 ### Поддерживаемые форматы ссылок
 
 - **SOCKS5:** `https://t.me/socks?server=HOST&port=PORT&user=USER&pass=PASS`
 - **MTProto:** `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET`
 
-VIP- и обычные пользователи используют **независимые** счётчики, поэтому запросы одной группы не влияют на очерёдность в другой.
-
 ## Прокси для самого бота
 
-Бот автоматически использует первый SOCKS5-прокси из списка `default` для своего подключения к Telegram API. Это необходимо в России, где Telegram (включая API) заблокирован.
+Бот автоматически использует первый SOCKS5-прокси из `proxies/users.json` для своего подключения к Telegram API. Это необходимо в России, где Telegram (включая API) заблокирован.
 
 Порядок выбора прокси для бота:
 1. Переменная окружения `BOT_PROXY_URL` (если задана)
-2. Первая SOCKS5-ссылка из `default` в `proxies/users.json`
+2. Первая SOCKS5-ссылка из `proxies/users.json`
 
 MTProto-ссылки не могут быть использованы ботом — только SOCKS5.
 
