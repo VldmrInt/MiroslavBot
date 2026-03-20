@@ -1,206 +1,137 @@
-# Telegram Proxy Bot
+# MiroslavBot — Telegram Proxy Bot
 
-Бот для равномерного распределения прокси с сегментацией пользователей.
+Бот для раздачи прокси в Telegram с поддержкой VIP-пользователей.
 
 ## Возможности
 
-- ✅ Выдача прокси с равномерным распределением
-- ✅ VIP-список прокси для выбранных пользователей (по Telegram username)
-- ✅ Независимые счётчики раздачи для VIP и обычных пользователей
-- ✅ Логирование всех запросов
-- ✅ Напоминание об оценке через сутки
-- ✅ Инструкции после первого получения прокси
+- Выдача прокси прямыми ссылками (`https://t.me/socks?...`) — подключение в один клик
+- VIP-список с отдельным пулом прокси (по Telegram username)
+- Независимые счётчики round-robin для VIP и обычных пользователей
+- Автоматическое использование SOCKS5-прокси для собственного подключения к Telegram API (работает при блокировке в РФ)
+- Подсказки для пользователей: инструкция по настройке и проверка статуса
+- Логирование всех запросов
+- Docker-контейнеризация
 
-## Установка
+## Быстрый старт
 
-1. Установите зависимости:
+### Docker Compose (рекомендуется)
+
 ```bash
-pip install -r requirements.txt
+cp .env.example .env
+nano .env              # вставьте BOT_TOKEN
+nano proxies/users.json  # заполните реальными прокси
+docker compose up -d
 ```
 
-2. Создайте файл `proxies/users.json` с настройками прокси (см. раздел ниже).
+### Без Docker
 
-3. Установите токен бота через переменную окружения:
 ```bash
+pip install -r requirements.txt
 export BOT_TOKEN="ваш_токен_бота"
+python bot.py
 ```
 
 ## Настройка прокси
 
-Все настройки прокси хранятся в файле `proxies/users.json`:
+Все настройки хранятся в `proxies/users.json`:
 
 ```json
 {
-  "vip_users": ["ivanov", "petrov", "sidorov"],
+  "vip_users": ["ivanov", "petrov"],
   "default": [
-    {
-      "type": "mtproto",
-      "server": "1.2.3.4",
-      "port": 443,
-      "secret": "ee367f90de5ca35a5939d8b49f5a3e0f62"
-    },
-    {
-      "type": "socks5",
-      "server": "5.6.7.8",
-      "port": 1080,
-      "username": "user",
-      "password": "pass"
-    },
-    "ip1:port1"
+    "https://t.me/socks?server=45.150.37.167&port=12335&user=user1&pass=passStrong123",
+    "https://t.me/socks?server=45.150.37.167&port=12336&user=user2&pass=passStrong456"
   ],
   "vip": [
-    {
-      "type": "mtproto",
-      "server": "10.0.0.1",
-      "port": 443,
-      "secret": "dd1234567890abcdef1234567890abcd"
-    }
+    "https://t.me/socks?server=45.150.37.167&port=12338&user=vip1&pass=vipPass111"
   ]
 }
 ```
 
-- `vip_users` — список username, которые получают VIP-прокси (например, `ivanov`)
-- `default` — прокси для обычных пользователей
-- `vip` — прокси для VIP-пользователей
+| Поле | Описание |
+|------|----------|
+| `vip_users` | Telegram-username, которые получают VIP-прокси |
+| `default` | Прокси для обычных пользователей |
+| `vip` | Прокси для VIP-пользователей |
 
-### Форматы записей прокси
+### Поддерживаемые форматы ссылок
 
-Каждый элемент массива `default` / `vip` может быть:
+- **SOCKS5:** `https://t.me/socks?server=HOST&port=PORT&user=USER&pass=PASS`
+- **MTProto:** `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET`
 
-#### MTProto (`type: "mtproto"`)
-```json
-{
-  "type": "mtproto",
-  "server": "1.2.3.4",
-  "port": 443,
-  "secret": "ee367f90de5ca35a5939d8b49f5a3e0f62"
-}
-```
-Бот отправит пользователю блок с деталями и ссылку `https://t.me/proxy?…`, по которой прокси подключится одним касанием.
+VIP- и обычные пользователи используют **независимые** счётчики, поэтому запросы одной группы не влияют на очерёдность в другой.
 
-#### SOCKS5 (`type: "socks5"`)
-```json
-{
-  "type": "socks5",
-  "server": "5.6.7.8",
-  "port": 1080,
-  "username": "user",
-  "password": "pass"
-}
-```
-Поля `username` и `password` опциональны. Бот отправит ссылку `https://t.me/socks?…`.
+## Прокси для самого бота
 
-#### Устаревший строковый формат
-```json
-"ip1:port1"
-```
-Строка отображается пользователю как есть. Поддерживается для обратной совместимости.
+Бот автоматически использует первый SOCKS5-прокси из списка `default` для своего подключения к Telegram API. Это необходимо в России, где Telegram (включая API) заблокирован.
 
-VIP- и обычные пользователи используют **независимые** счётчики раздачи, поэтому
-запросы одной группы не влияют на очерёдность в другой.
+Порядок выбора прокси для бота:
+1. Переменная окружения `BOT_PROXY_URL` (если задана)
+2. Первая SOCKS5-ссылка из `default` в `proxies/users.json`
 
-## Инструкции
+MTProto-ссылки не могут быть использованы ботом — только SOCKS5.
 
-Добавьте 3 изображения в папку `images/`:
-- `instruction1.jpg` — первая картинка
-- `instruction2.jpg` — вторая картинка  
-- `instruction3.jpg` — третья картинка
+## Переменные окружения
 
-Они автоматически отправятся пользователю после получения первого прокси.
+| Переменная | Описание | Обязательна |
+|------------|----------|-------------|
+| `BOT_TOKEN` | Токен бота от @BotFather | Да |
+| `BOT_PROXY_URL` | Явный прокси для бота (`socks5://user:pass@host:port`) | Нет |
 
-## Использование
+## Команды бота
 
-Запустите бота:
-```bash
-python bot.py
-```
+| Команда | Описание |
+|---------|----------|
+| `/start` | Приветствие и кнопка получения прокси |
+| `/proxy` | Получить прокси напрямую |
 
-В Telegram:
-- `/start` — начать работу
-- `/proxy` — получить прокси
-- Кнопка «Получить прокси» — получить прокси с клавиатуры
+## Docker
 
-Через сутки после получения прокси бот спросит оценку работы.
-
-## Запуск без Docker (в фоне)
-
-### Linux / macOS
-Запустите бота в фоне с помощью `nohup`:
+### Docker Compose
 
 ```bash
-BOT_TOKEN="ваш_токен" nohup python3 bot.py > bot.log 2>&1 &
-```
-
-Остановить можно, найдя PID и убив процесс:
-
-```bash
-ps aux | grep bot.py
-kill <PID>
-```
-
-### Windows (PowerShell)
-Запуск в фоне:
-
-```powershell
-Start-Process -NoNewWindow -FilePath python -ArgumentList "bot.py" -RedirectStandardOutput "bot.log" -RedirectStandardError "bot.log"
-```
-
-Чтобы остановить, найдите процесс и завершите его:
-
-```powershell
-Get-Process python | Where-Object {$_.Path -like "*bot.py*"} | Stop-Process
-```
-
-## Запуск через Docker
-
-### Быстрый старт (Docker Compose)
-
-1. Скопируйте `.env.example` в `.env` и укажите токен бота:
-```bash
-cp .env.example .env
-# Отредактируйте .env, вставив ваш BOT_TOKEN
-```
-
-2. Запустите:
-```bash
+# Запустить
 docker compose up -d
-```
 
-3. Посмотреть логи:
-```bash
+# Логи
 docker compose logs -f
-```
 
-4. Остановить:
-```bash
+# Остановить
 docker compose down
+
+# Пересобрать после изменений
+docker compose up -d --build
 ```
 
-### Сборка и запуск вручную
+### Ручная сборка
 
 ```bash
-docker build -t telegram-proxy-bot .
+docker build -t miroslav-bot .
 docker run -d --restart unless-stopped \
   -e BOT_TOKEN="ваш_токен" \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/proxies:/app/proxies \
-  -v $(pwd)/images:/app/images \
-  telegram-proxy-bot
+  miroslav-bot
 ```
 
-### Переменные окружения
+### Тома
 
-| Переменная | Описание | Обязательна |
-|------------|----------|-------------|
-| `BOT_TOKEN` | Токен вашего Telegram-бота | Да |
+| Том | Описание |
+|-----|----------|
+| `./data:/app/data` | Данные пользователей (`users.json`) |
+| `./proxies:/app/proxies` | Конфигурация прокси |
 
-### Тома (Volumes)
+## Запуск в фоне (без Docker)
 
-Для сохранения данных между перезапусками монтируются:
-- `./data` — данные пользователей
-- `./proxies` — конфигурация прокси
-- `./images` — картинки инструкций
+```bash
+# Linux / macOS
+BOT_TOKEN="ваш_токен" nohup python3 bot.py > bot.log 2>&1 &
+
+# Остановить
+ps aux | grep bot.py
+kill <PID>
+```
 
 ## Логи
 
-Все запросы сохраняются в файл `bot.log`.
+Все запросы сохраняются в `bot.log` (в Docker — также через `docker compose logs`).

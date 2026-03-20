@@ -2,13 +2,8 @@ services:
   bot:
     build: .
     restart: unless-stopped
-    env_file:
-      - .env
     environment:
       - BOT_TOKEN=${BOT_TOKEN}
-      # Явный прокси для бота (необязательно — автоматически берётся из proxies/users.json).
-      # Раскомментируйте и заполните при необходимости:
-      # - BOT_PROXY_URL=socks5://user:pass@45.150.37.167:12335
       - BOT_PROXY_URL=${BOT_PROXY_URL:-}
     volumes:
       - ./data:/app/data
