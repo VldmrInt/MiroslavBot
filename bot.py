@@ -19,6 +19,7 @@ from datetime import datetime
 from urllib.parse import parse_qs, urlparse
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -374,6 +375,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # Точка входа
 # ---------------------------------------------------------------------------
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, (TimedOut, NetworkError)):
+        logger.warning("Сетевая ошибка (игнорируем): %s", context.error)
+        return
+    logger.error("Необработанное исключение:", exc_info=context.error)
+
+
 def main() -> None:
     token = os.environ.get("BOT_TOKEN", "").strip()
     if not token:
@@ -382,7 +390,13 @@ def main() -> None:
 
     bot_proxy = _get_bot_proxy()
 
-    builder = ApplicationBuilder().token(token)
+    builder = (
+        ApplicationBuilder()
+        .token(token)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+    )
     if bot_proxy:
         builder = builder.proxy(bot_proxy).get_updates_proxy(bot_proxy)
 
@@ -390,6 +404,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("proxy", cmd_proxy))
     app.add_handler(CallbackQueryHandler(handle_callback))
+    app.add_error_handler(error_handler)
 
     logger.info("Бот запущен%s", f" (прокси: {bot_proxy})" if bot_proxy else "")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
