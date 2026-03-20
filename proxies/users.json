@@ -1,11 +1,12 @@
 {
   "vip_users": ["ivanov", "petrov", "sidorov"],
   "default": [
-    "ip1:port1",
-    "ip2:port2"
+    "https://t.me/socks?server=45.150.37.167&port=12335&user=user1&pass=passStrong123",
+    "https://t.me/socks?server=45.150.37.167&port=12336&user=user2&pass=passStrong456",
+    "https://t.me/socks?server=45.150.37.167&port=12337&user=user3&pass=passStrong789"
   ],
   "vip": [
-    "10.0.0.1:8080",
-    "10.0.0.2:8080"
+    "https://t.me/socks?server=45.150.37.167&port=12338&user=vip1&pass=vipPass111",
+    "https://t.me/socks?server=45.150.37.167&port=12339&user=vip2&pass=vipPass222"
   ]
 }

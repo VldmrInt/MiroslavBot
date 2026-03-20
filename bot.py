@@ -1,338 +1,415 @@
-import logging
-import json
-import os
-from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+#!/usr/bin/env python3
+"""
+MiroslavBot — раздача прокси для Telegram.
+Полная версия с нуля.
 
-# Настройка логирования
+Формат прокси в proxies/users.json:
+  https://t.me/socks?server=HOST&port=PORT&user=USER&pass=PASS
+  https://t.me/proxy?server=HOST&port=PORT&secret=SECRET
+
+Бот автоматически использует первый SOCKS5-прокси из списка для своего
+собственного подключения к Telegram API (актуально при блокировке в РФ).
+"""
+
+import json
+import logging
+import os
+import sys
+from datetime import datetime
+from urllib.parse import parse_qs, urlparse
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
+
+# ---------------------------------------------------------------------------
+# Логирование
+# ---------------------------------------------------------------------------
+
+_log_path = "/app/bot.log" if os.path.isdir("/app") else "bot.log"
+_handlers: list = [logging.StreamHandler(sys.stdout)]
+try:
+    _handlers.append(logging.FileHandler(_log_path, encoding="utf-8"))
+except OSError:
+    pass
+
 logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
-    handlers=[
-        logging.FileHandler('bot.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=_handlers,
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
 # Пути
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROXIES_DIR = os.path.join(BASE_DIR, 'proxies')
-DATA_FILE = os.path.join(BASE_DIR, 'data', 'users.json')
+# ---------------------------------------------------------------------------
 
-# Создаём директории
-os.makedirs(PROXIES_DIR, exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, 'data'), exist_ok=True)
+_IN_DOCKER = os.path.isdir("/app/data")
+DATA_DIR = "/app/data" if _IN_DOCKER else "./data"
+PROXIES_FILE = "/app/proxies/users.json" if _IN_DOCKER else "./proxies/users.json"
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+os.makedirs(DATA_DIR, exist_ok=True)
 
-# Раздельные индексы для VIP- и обычных прокси (предотвращают взаимное сбивание счётчика).
-# Бот работает на asyncio (однопоточный event loop), поэтому чтения/записи без await
-# между ними атомарны — дополнительная блокировка не требуется.
-proxy_indices: dict = {'vip': 0, 'default': 0}
+# ---------------------------------------------------------------------------
+# Состояние ротации прокси (в памяти; сбрасывается при рестарте)
+# ---------------------------------------------------------------------------
 
+_proxy_indices: dict = {"default": 0, "vip": 0}
 
-def load_users_data() -> dict:
-    """Загружает данные пользователей из JSON"""
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Ошибка загрузки данных пользователей: {e}")
-            return {}
-    return {}
+# ---------------------------------------------------------------------------
+# Работа с данными пользователей
+# ---------------------------------------------------------------------------
 
-
-def save_users_data(data: dict) -> None:
-    """Сохраняет данные пользователей в JSON"""
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def _load_users() -> dict:
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.error("Ошибка чтения users.json: %s", exc)
+        return {}
 
 
-def get_user_data(user_id: int) -> dict:
-    """Получает данные пользователя или создаёт новые"""
-    data = load_users_data()
-    if str(user_id) not in data:
-        data[str(user_id)] = {
-            'username': '',
-            'proxy_count': 0,
-            'last_proxy': None,
-            'last_proxy_time': None
+def _save_users(data: dict) -> None:
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logger.error("Ошибка записи users.json: %s", exc)
+
+
+def _get_user(user_id: int) -> dict:
+    data = _load_users()
+    uid = str(user_id)
+    if uid not in data:
+        data[uid] = {
+            "username": None,
+            "proxy_count": 0,
+            "last_proxy": None,
+            "last_proxy_time": None,
         }
-        save_users_data(data)
-    return data[str(user_id)]
+        _save_users(data)
+    return data[uid]
 
 
-def update_user_data(user_id: int, **kwargs) -> None:
-    """Обновляет данные пользователя"""
-    data = load_users_data()
-    if str(user_id) in data:
-        data[str(user_id)].update(kwargs)
-    else:
-        data[str(user_id)] = kwargs
-    save_users_data(data)
+def _update_user(user_id: int, **kwargs) -> None:
+    data = _load_users()
+    uid = str(user_id)
+    if uid not in data:
+        data[uid] = {
+            "username": None,
+            "proxy_count": 0,
+            "last_proxy": None,
+            "last_proxy_time": None,
+        }
+    data[uid].update(kwargs)
+    _save_users(data)
+
+# ---------------------------------------------------------------------------
+# Работа с прокси
+# ---------------------------------------------------------------------------
+
+def _load_proxies() -> dict:
+    try:
+        with open(PROXIES_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as exc:
+        logger.error("Ошибка чтения proxies/users.json: %s", exc)
+        return {"vip_users": [], "default": [], "vip": []}
 
 
-def load_proxies_config() -> dict:
-    """Загружает конфигурацию прокси из users.json"""
-    config_file = os.path.join(PROXIES_DIR, 'users.json')
-    if os.path.exists(config_file):
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Ошибка загрузки users.json: {e}")
-    return {}
-
-
-def get_next_proxy(username: str) -> str:
-    """Получает следующий прокси с равномерным распределением.
-
-    VIP- и обычные пользователи используют независимые счётчики, поэтому
-    запросы одной группы не влияют на очерёдность в другой.
+def _parse_link(link: str):
     """
-    config = load_proxies_config()
-
-    vip_users = config.get('vip_users', [])
-    is_vip = bool(username and username in vip_users and 'vip' in config)
-
-    if is_vip:
-        proxies = config['vip']
-        list_key = 'vip'
-    else:
-        proxies = config.get('default', [])
-        list_key = 'default'
-
-    if not proxies:
-        return "Нет доступных прокси"
-
-    idx = proxy_indices[list_key]
-    proxy = proxies[idx]
-    proxy_indices[list_key] = (idx + 1) % len(proxies)
-    return str(proxy)
-
-
-async def _issue_proxy(
-    user_id: int,
-    username: str,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> tuple[str, int]:
-    """Выдаёт прокси, обновляет статистику пользователя.
-
-    Возвращает кортеж (proxy, proxy_count).
+    Разбирает ссылку вида:
+      https://t.me/socks?server=...&port=...&user=...&pass=...
+      https://t.me/proxy?server=...&port=...&secret=...
+    Возвращает словарь с компонентами или None при ошибке.
     """
-    proxy = get_next_proxy(username)
+    try:
+        parsed = urlparse(link.strip())
+        params = parse_qs(parsed.query)
 
-    user_data = get_user_data(user_id)
-    proxy_count = user_data.get('proxy_count', 0) + 1
-    update_user_data(
+        def _get(key):
+            vals = params.get(key)
+            return vals[0] if vals else None
+
+        if "/socks" in parsed.path:
+            return {
+                "type": "socks5",
+                "server": _get("server"),
+                "port": int(_get("port") or 0),
+                "user": _get("user"),
+                "pass": _get("pass"),
+            }
+        if "/proxy" in parsed.path:
+            return {
+                "type": "mtproto",
+                "server": _get("server"),
+                "port": int(_get("port") or 0),
+                "secret": _get("secret"),
+            }
+    except Exception as exc:
+        logger.warning("Не удалось разобрать ссылку '%s': %s", link, exc)
+    return None
+
+
+def _link_to_socks5_url(link: str):
+    """
+    Преобразует t.me/socks ссылку в socks5://user:pass@server:port
+    для использования ботом при подключении к Telegram API.
+    MTProto-ссылки не поддерживаются как SOCKS5 — возвращает None.
+    """
+    info = _parse_link(link)
+    if not info or info["type"] != "socks5":
+        return None
+    server = info.get("server") or ""
+    port = info.get("port") or 1080
+    user = info.get("user") or ""
+    pwd = info.get("pass") or ""
+    if user and pwd:
+        return f"socks5://{user}:{pwd}@{server}:{port}"
+    return f"socks5://{server}:{port}"
+
+
+def _get_bot_proxy():
+    """
+    Определяет прокси для собственного подключения бота к Telegram API.
+    Приоритет:
+      1. Переменная окружения BOT_PROXY_URL (явное переопределение)
+      2. Первый SOCKS5-прокси из списка default в proxies/users.json
+    """
+    env_val = os.environ.get("BOT_PROXY_URL", "").strip()
+    if env_val:
+        logger.info("Бот использует прокси из BOT_PROXY_URL: %s", env_val)
+        return env_val
+
+    config = _load_proxies()
+    for link in config.get("default", []):
+        url = _link_to_socks5_url(link)
+        if url:
+            logger.info("Бот использует прокси из списка default: %s", url)
+            return url
+
+    logger.warning(
+        "SOCKS5-прокси для бота не найден. "
+        "Если Telegram заблокирован, задайте BOT_PROXY_URL."
+    )
+    return None
+
+
+def _next_proxy(username):
+    """
+    Выбирает следующий прокси по round-robin с учётом VIP-статуса.
+    Возвращает ссылку как есть (https://t.me/socks?...).
+    """
+    config = _load_proxies()
+    vip_users = [u.lstrip("@").lower() for u in config.get("vip_users", [])]
+    uname_norm = (username or "").lstrip("@").lower()
+
+    is_vip = bool(uname_norm and uname_norm in vip_users)
+
+    if is_vip and config.get("vip"):
+        pool = config["vip"]
+        key = "vip"
+    elif config.get("default"):
+        pool = config["default"]
+        key = "default"
+    else:
+        return None
+
+    idx = _proxy_indices[key] % len(pool)
+    proxy = pool[idx]
+    _proxy_indices[key] = (idx + 1) % len(pool)
+    return proxy
+
+
+def _issue_proxy(user_id: int, username):
+    """
+    Выдаёт следующий прокси пользователю, сохраняет в JSON.
+    Возвращает (ссылка_или_None, номер_запроса).
+    """
+    proxy = _next_proxy(username)
+    user = _get_user(user_id)
+    count = user["proxy_count"] + 1
+
+    _update_user(
         user_id,
-        proxy_count=proxy_count,
+        username=username,
+        proxy_count=count,
         last_proxy=proxy,
         last_proxy_time=datetime.now().isoformat(),
     )
-
-    logger.info(f"Пользователь {username} ({user_id}) получил прокси: {proxy} (запрос #{proxy_count})")
-
-    return proxy, proxy_count
-
-
-async def send_instructions(user_id: int, bot) -> None:
-    """Отправляет текстовые инструкции по настройке прокси"""
-
-    instructions_text = (
-        "📖 <b>Инструкция по настройке прокси в Telegram</b>\n\n"
-
-        "⚡️ <b>Быстрый способ</b>\n"
-        "Нажмите на ссылку-прокси и нажмите <b>Подключить</b> — прокси активируется автоматически без ручной настройки.\n\n"
-
-        "❌ <b>Прокси не работает в web-версии Telegram (web.telegram.org)</b> — используйте только приложение.\n\n"
-
-        "🖥 <b>Windows / macOS / Linux</b>\n"
-        "1. Откройте <b>Настройки</b> → <b>Расширенные</b>\n"
-        "2. Нажмите <b>Тип подключения</b> → <b>Использовать прокси</b>\n"
-        "3. Нажмите <b>Добавить прокси</b>\n"
-        "4. Выберите тип <b>SOCKS5</b> или <b>MTProto</b>\n"
-        "5. Введите IP-адрес и порт из вашего прокси\n"
-        "6. Нажмите <b>Сохранить</b> и <b>Включить</b>\n"
-        "🔴 Выключить: Настройки → Расширенные → Тип подключения → <b>Нет прокси</b>\n"
-        "🔄 Сменить: в списке прокси выберите другой или нажмите <b>Добавить прокси</b>\n\n"
-
-        "📱 <b>Android</b>\n"
-        "1. Откройте <b>Настройки</b> → <b>Данные и хранилище</b>\n"
-        "2. Нажмите <b>Настройки прокси</b>\n"
-        "3. Включите тумблер <b>Использовать прокси</b>\n"
-        "4. Нажмите <b>Добавить прокси</b>\n"
-        "5. Введите IP-адрес и порт из вашего прокси\n"
-        "6. Нажмите <b>Готово</b> и <b>Подключить</b>\n"
-        "🔴 Выключить: Настройки → Данные и хранилище → Настройки прокси → выключить тумблер\n"
-        "🔄 Сменить: нажмите на текущий прокси → измените данные\n\n"
-
-        "🍎 <b>iOS</b>\n"
-        "1. Откройте <b>Настройки</b> → <b>Данные и хранилище</b>\n"
-        "2. Нажмите <b>Прокси</b>\n"
-        "3. Включите тумблер <b>Использовать прокси</b>\n"
-        "4. Нажмите <b>Добавить прокси</b>\n"
-        "5. Введите IP-адрес и порт из вашего прокси\n"
-        "6. Нажмите <b>Сохранить</b> и <b>Подключить</b>\n"
-        "🔴 Выключить: Настройки → Данные и хранилище → Прокси → выключить тумблер\n"
-        "🔄 Сменить: нажмите на текущий прокси → измените данные"
+    logger.info(
+        "Пользователь %s (%d) получил прокси: %s (запрос #%d)",
+        username or "unknown",
+        user_id,
+        proxy,
+        count,
     )
+    return proxy, count
 
-    status_and_warnings_text = (
-        "✅ <b>Как понять, что прокси включён</b>\n\n"
-        "После успешного подключения вы увидите:\n"
-        "• Зелёную точку или иконку щита 🛡 рядом с именем в настройках\n"
-        "• Статус «Подключено» в разделе настроек прокси\n"
-        "• Telegram работает там, где без прокси был недоступен\n\n"
+# ---------------------------------------------------------------------------
+# Тексты
+# ---------------------------------------------------------------------------
 
-        "⚠️ <b>Важные предупреждения</b>\n\n"
+_INSTRUCTIONS = (
+    "📖 *Инструкция по настройке прокси в Telegram*\n\n"
+    "*🖥 Windows / macOS / Linux*\n"
+    "1\\. Откройте Telegram → Настройки → Конфиденциальность и безопасность → Тип подключения\n"
+    "2\\. Выберите *Использовать прокси* → *SOCKS5*\n"
+    "3\\. Введите сервер, порт, логин и пароль из ссылки\n"
+    "4\\. Нажмите *Сохранить*\n\n"
+    "*📱 Android*\n"
+    "1\\. Настройки → Конфиденциальность и безопасность → Настройки прокси\n"
+    "2\\. Нажмите *Добавить прокси* → *SOCKS5*\n"
+    "3\\. Заполните поля → *Готово*\n\n"
+    "*🍎 iOS*\n"
+    "1\\. Настройки → Конфиденциальность и безопасность → Использовать прокси\n"
+    "2\\. Нажмите *Добавить прокси* → *SOCKS5*\n"
+    "3\\. Заполните поля → *Сохранить*\n\n"
+    "💡 *Совет:* Нажмите на ссылку прямо в Telegram — приложение автоматически предложит добавить прокси\\!"
+)
 
-        "🔶 <b>Прокси может конфликтовать с VPN</b>\n"
-        "Если у вас включён VPN, прокси может не работать или работать некорректно. "
-        "Отключите VPN перед использованием прокси.\n\n"
+_STATUS = (
+    "✅ *Как понять, что прокси включён*\n\n"
+    "• Если этот бот отвечает — прокси работает ✅\n"
+    "• Сообщения доставляются без задержек — всё в порядке ✅\n"
+    "• В настройках прокси отображается зелёная галочка и время задержки ✅\n\n"
+    "⚠️ *Важные замечания:*\n"
+    "• Прокси и VPN *несовместимы* — если включён VPN, отключите его\n"
+    "• Работа прокси зависит от вашего интернет\\-провайдера\n"
+    "• На некоторых мобильных операторах прокси может не работать — попробуйте через Wi\\-Fi"
+)
 
-        "🔶 <b>Прокси может не работать по независящим от нас причинам</b>\n"
-        "Доступность прокси зависит от интернет-провайдера, страны и настроек сети. "
-        "Мы не можем гарантировать бесперебойную работу в любой ситуации. "
-        "Если прокси не работает — попробуйте получить новый.\n\n"
+# ---------------------------------------------------------------------------
+# Клавиатуры
+# ---------------------------------------------------------------------------
 
-        "🔶 <b>Прокси — не панацея для мобильного интернета</b>\n"
-        "На мобильном интернете и при включённых «белых списках» у провайдера "
-        "прокси может не давать нужного эффекта. В таких случаях рекомендуем "
-        "использовать VPN или другие инструменты обхода блокировок."
-    )
-
-    messages = [
-        ("инструкции по настройке", instructions_text),
-        ("статус и предупреждения", status_and_warnings_text),
-    ]
-    for label, text in messages:
-        try:
-            await bot.send_message(chat_id=user_id, text=text, parse_mode='HTML')
-        except Exception as e:
-            logger.error(f"Ошибка отправки инструкций ({label}): {e}")
+def _proxy_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Получить другой прокси", callback_data="new_proxy")],
+        [InlineKeyboardButton(
+            "📖 Инструкция по настройке прокси в Telegram",
+            callback_data="show_instructions",
+        )],
+        [InlineKeyboardButton(
+            "✅ Как понять, что прокси включён",
+            callback_data="show_status",
+        )],
+    ])
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /start"""
+def _start_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Получить прокси", callback_data="get_proxy")],
+    ])
+
+# ---------------------------------------------------------------------------
+# Обработчики команд и кнопок
+# ---------------------------------------------------------------------------
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    user_id = user.id
-    username = user.username or ''
-
-    # Сохраняем никнейм
-    get_user_data(user_id)
-    update_user_data(user_id, username=username)
-
-    keyboard = [[InlineKeyboardButton("✅ Понятно, продолжить", callback_data='acknowledge_proxy')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    _update_user(user.id, username=user.username)
+    logger.info("Пользователь %s (%d) запустил бота", user.username, user.id)
 
     await update.message.reply_text(
-        '⚠️ Важно!\n\n'
-        'Прокси работает только с приложением Telegram:\n'
-        '• Windows\n'
-        '• Linux\n'
-        '• macOS\n'
-        '• Android\n'
-        '• iOS\n\n'
-        '❌ Прокси НЕ работает с web-версией Telegram (web.telegram.org).\n\n'
-        'Нажмите кнопку ниже, чтобы продолжить.',
-        reply_markup=reply_markup
+        "👋 Привет\\! Этот бот выдаёт прокси для Telegram\\.\n\n"
+        "⚠️ *Внимание:* Бот не работает в браузерной версии Telegram "
+        "\\(web\\.telegram\\.org\\)\\. Используйте мобильное приложение или "
+        "десктопный клиент\\.\n\n"
+        "Нажмите кнопку ниже, чтобы получить прокси\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=_start_keyboard(),
     )
 
-    logger.info(f"Пользователь {username} ({user_id}) начал работу с ботом")
 
+async def cmd_proxy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    proxy, count = _issue_proxy(user.id, user.username)
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик нажатий на кнопки"""
-    query = update.callback_query
-
-    try:
-        await query.answer()
-    except Exception as e:
-        logger.warning(f"Ошибка ответа на callback: {e}")
+    if not proxy:
+        await update.message.reply_text(
+            "❌ Прокси\\-серверы временно недоступны\\. Попробуйте позже\\.",
+            parse_mode="MarkdownV2",
+        )
         return
+
+    await update.message.reply_text(
+        f"🌐 *Ваш прокси \\#{count}:*\n\n"
+        f"`{proxy}`\n\n"
+        "Нажмите на ссылку — Telegram предложит добавить прокси автоматически\\.",
+        parse_mode="MarkdownV2",
+        reply_markup=_proxy_keyboard(),
+    )
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
 
     user = query.from_user
-    user_id = user.id
-    username = user.username or ''
+    data = query.data
 
-    # Показываем инструкции и кнопку "Я прочитал"
-    if query.data == 'acknowledge_proxy':
-        try:
-            await query.edit_message_text(text='Добро пожаловать!')
-        except Exception as e:
-            logger.warning(f"Ошибка обновления сообщения после подтверждения: {e}")
-        await send_instructions(user_id, context.bot)
-        keyboard = [[InlineKeyboardButton("✅ Я прочитал", callback_data='read_instructions')]]
-        try:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text='Прочитайте инструкцию выше и нажмите кнопку.',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        except Exception as e:
-            logger.warning(f"Ошибка отправки кнопки 'Я прочитал': {e}")
-        return
+    if data in ("get_proxy", "new_proxy"):
+        proxy, count = _issue_proxy(user.id, user.username)
 
-    # Пользователь прочитал инструкцию — выдаём первый прокси
-    if query.data == 'read_instructions':
-        proxy, _ = await _issue_proxy(user_id, username, context)
-        keyboard = [[InlineKeyboardButton("Получить новый прокси", callback_data='new_proxy')]]
-        try:
+        if not proxy:
             await query.edit_message_text(
-                text=f"Ваш прокси: {proxy}",
-                reply_markup=InlineKeyboardMarkup(keyboard)
+                "❌ Прокси\\-серверы временно недоступны\\. Попробуйте позже\\.",
+                parse_mode="MarkdownV2",
             )
-        except Exception as e:
-            logger.warning(f"Ошибка отправки прокси после инструкции: {e}")
-        return
+            return
 
-    # Выдача нового прокси
-    if query.data == 'new_proxy':
-        proxy, proxy_count = await _issue_proxy(user_id, username, context)
+        await query.edit_message_text(
+            f"🌐 *Ваш прокси \\#{count}:*\n\n"
+            f"`{proxy}`\n\n"
+            "Нажмите на ссылку — Telegram предложит добавить прокси автоматически\\.",
+            parse_mode="MarkdownV2",
+            reply_markup=_proxy_keyboard(),
+        )
 
-        keyboard = [[InlineKeyboardButton("Получить новый прокси", callback_data='new_proxy')]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    elif data == "show_instructions":
+        await query.message.reply_text(
+            _INSTRUCTIONS,
+            parse_mode="MarkdownV2",
+        )
 
-        try:
-            await query.edit_message_text(text=f"Ваш прокси: {proxy}", reply_markup=reply_markup)
-        except Exception as e:
-            logger.warning(f"Ошибка обновления сообщения: {e}")
+    elif data == "show_status":
+        await query.message.reply_text(
+            _STATUS,
+            parse_mode="MarkdownV2",
+        )
 
-
-async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Обработчик команды /proxy"""
-    user = update.effective_user
-    user_id = user.id
-    username = user.username or ''
-
-    proxy, _ = await _issue_proxy(user_id, username, context)
-    await update.message.reply_text(f"Ваш прокси: {proxy}")
-
+# ---------------------------------------------------------------------------
+# Точка входа
+# ---------------------------------------------------------------------------
 
 def main() -> None:
-    """Запуск бота"""
-    token = os.environ.get('BOT_TOKEN', '')
-    if not token or token == 'YOUR_BOT_TOKEN':
-        logger.error("Не задан токен бота! Установите переменную окружения BOT_TOKEN")
-        return
+    token = os.environ.get("BOT_TOKEN", "").strip()
+    if not token:
+        logger.error("Переменная окружения BOT_TOKEN не задана!")
+        sys.exit(1)
 
-    proxy_url = os.environ.get('PROXY_URL', '')
-    builder = Application.builder().token(token)
-    if proxy_url:
-        builder = builder.proxy_url(proxy_url)
-        logger.info(f"Используется прокси: {proxy_url}")
-    application = builder.build()
-    
-    # Регистрируем обработчики
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("proxy", proxy_command))
-    application.add_handler(CallbackQueryHandler(button))
-    
-    logger.info("Бот запущен")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    bot_proxy = _get_bot_proxy()
+
+    builder = ApplicationBuilder().token(token)
+    if bot_proxy:
+        builder = builder.proxy(bot_proxy).get_updates_proxy(bot_proxy)
+
+    app = builder.build()
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("proxy", cmd_proxy))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+
+    logger.info("Бот запущен%s", f" (прокси: {bot_proxy})" if bot_proxy else "")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

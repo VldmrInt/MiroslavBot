@@ -1,30 +1,24 @@
-# Используем официальный образ Python
 FROM python:3.11-slim
 
-# Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем зависимости
+# Зависимости устанавливаем отдельным слоем для кэширования
 COPY requirements.txt .
-
-# Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Создаём непривилегированного пользователя и необходимые директории
+# Непривилегированный пользователь
 RUN useradd --no-create-home --shell /bin/false botuser
 
-# Копируем исходный код
+# Исходный код
 COPY --chown=botuser:botuser . .
 
-# Создаём директории с правильными правами (после COPY, чтобы не затереть содержимое)
-RUN mkdir -p proxies images data \
+# Директории для постоянных данных
+RUN mkdir -p /app/data /app/proxies \
     && chown -R botuser:botuser /app
 
-# Переключаемся на непривилегированного пользователя
 USER botuser
 
-# Переменная окружения для токена бота
 ENV BOT_TOKEN=""
+ENV BOT_PROXY_URL=""
 
-# Запуск бота
 CMD ["python", "bot.py"]
