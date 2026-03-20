@@ -1,7 +1,6 @@
 import logging
 import json
 import os
-import urllib.parse
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -110,83 +109,7 @@ def get_next_proxy(username: str) -> str:
     idx = proxy_indices[list_key]
     proxy = proxies[idx]
     proxy_indices[list_key] = (idx + 1) % len(proxies)
-    return proxy
-
-
-def proxy_to_string(proxy) -> str:
-    """Преобразует запись прокси в строку для хранения и логирования.
-
-    Поддерживает три формата записей в proxies/users.json:
-    - str  — старый формат «host:port» (возвращается без изменений)
-    - dict с type=«mtproto» — возвращает «mtproto://host:port/secret»
-    - dict с type=«socks5»  — возвращает «socks5://[user:pass@]host:port»
-    """
-    if isinstance(proxy, str):
-        return proxy
-    proxy_type = proxy.get('type', '').lower()
-    server = proxy.get('server', '')
-    port = proxy.get('port', '')
-    if proxy_type == 'mtproto':
-        secret = proxy.get('secret', '')
-        return f"mtproto://{server}:{port}/{secret}"
-    if proxy_type == 'socks5':
-        username = proxy.get('username', '')
-        password = proxy.get('password', '')
-        if username:
-            return f"socks5://{username}:{password}@{server}:{port}"
-        return f"socks5://{server}:{port}"
     return str(proxy)
-
-
-def format_proxy_message(proxy) -> str:
-    """Форматирует запись прокси в HTML-сообщение с Telegram deep link.
-
-    Для MTProto  генерирует ссылку «https://t.me/proxy?…».
-    Для SOCKS5   генерирует ссылку «https://t.me/socks?…».
-    Для строкового формата возвращает прокси в теге <code>.
-    """
-    if isinstance(proxy, str):
-        return f"Ваш прокси: <code>{proxy}</code>"
-
-    proxy_type = proxy.get('type', '').lower()
-    server = proxy.get('server', '')
-    port = proxy.get('port', '')
-
-    if proxy_type == 'mtproto':
-        secret = proxy.get('secret', '')
-        params = urllib.parse.urlencode({'server': server, 'port': port, 'secret': secret})
-        link = f"https://t.me/proxy?{params}"
-        return (
-            f"🔐 <b>MTProto прокси</b>\n"
-            f"Сервер: <code>{server}</code>\n"
-            f"Порт: <code>{port}</code>\n"
-            f"Секрет: <code>{secret}</code>\n\n"
-            f'<a href="{link}">👆 Нажмите для автоматического подключения</a>'
-        )
-
-    if proxy_type == 'socks5':
-        username = proxy.get('username', '')
-        password = proxy.get('password', '')
-        params = {'server': server, 'port': port}
-        if username:
-            params['user'] = username
-        if password:
-            params['pass'] = password
-        link = f"https://t.me/socks?{urllib.parse.urlencode(params)}"
-        text = (
-            f"🧦 <b>SOCKS5 прокси</b>\n"
-            f"Сервер: <code>{server}</code>\n"
-            f"Порт: <code>{port}</code>\n"
-        )
-        if username:
-            text += f"Логин: <code>{username}</code>\n"
-        if password:
-            text += f"Пароль: <code>{password}</code>\n"
-        text += f'\n<a href="{link}">👆 Нажмите для автоматического подключения</a>'
-        return text
-
-    # Неизвестный тип — показываем как строку
-    return f"Ваш прокси: <code>{proxy_to_string(proxy)}</code>"
 
 
 async def _issue_proxy(
@@ -199,18 +122,17 @@ async def _issue_proxy(
     Возвращает кортеж (proxy, proxy_count).
     """
     proxy = get_next_proxy(username)
-    proxy_str = proxy_to_string(proxy)
 
     user_data = get_user_data(user_id)
     proxy_count = user_data.get('proxy_count', 0) + 1
     update_user_data(
         user_id,
         proxy_count=proxy_count,
-        last_proxy=proxy_str,
+        last_proxy=proxy,
         last_proxy_time=datetime.now().isoformat(),
     )
 
-    logger.info(f"Пользователь {username} ({user_id}) получил прокси: {proxy_str} (запрос #{proxy_count})")
+    logger.info(f"Пользователь {username} ({user_id}) получил прокси: {proxy} (запрос #{proxy_count})")
 
     return proxy, proxy_count
 
@@ -359,8 +281,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         keyboard = [[InlineKeyboardButton("Получить новый прокси", callback_data='new_proxy')]]
         try:
             await query.edit_message_text(
-                text=format_proxy_message(proxy),
-                parse_mode='HTML',
+                text=f"Ваш прокси: {proxy}",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         except Exception as e:
@@ -375,11 +296,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         try:
-            await query.edit_message_text(
-                text=format_proxy_message(proxy),
-                parse_mode='HTML',
-                reply_markup=reply_markup,
-            )
+            await query.edit_message_text(text=f"Ваш прокси: {proxy}", reply_markup=reply_markup)
         except Exception as e:
             logger.warning(f"Ошибка обновления сообщения: {e}")
 
@@ -391,7 +308,7 @@ async def proxy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     username = user.username or ''
 
     proxy, _ = await _issue_proxy(user_id, username, context)
-    await update.message.reply_text(format_proxy_message(proxy), parse_mode='HTML')
+    await update.message.reply_text(f"Ваш прокси: {proxy}")
 
 
 def main() -> None:
@@ -400,8 +317,13 @@ def main() -> None:
     if not token or token == 'YOUR_BOT_TOKEN':
         logger.error("Не задан токен бота! Установите переменную окружения BOT_TOKEN")
         return
-    
-    application = Application.builder().token(token).build()
+
+    proxy_url = os.environ.get('PROXY_URL', '')
+    builder = Application.builder().token(token)
+    if proxy_url:
+        builder = builder.proxy_url(proxy_url)
+        logger.info(f"Используется прокси: {proxy_url}")
+    application = builder.build()
     
     # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
