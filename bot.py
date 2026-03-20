@@ -58,7 +58,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 # Состояние ротации прокси (в памяти; сбрасывается при рестарте)
 # ---------------------------------------------------------------------------
 
-_proxy_indices: dict = {"default": 0, "vip": 0}
+_proxy_index: int = 0
 
 # ---------------------------------------------------------------------------
 # Работа с данными пользователей
@@ -114,13 +114,13 @@ def _update_user(user_id: int, **kwargs) -> None:
 # Работа с прокси
 # ---------------------------------------------------------------------------
 
-def _load_proxies() -> dict:
+def _load_proxies() -> list:
     try:
         with open(PROXIES_FILE, encoding="utf-8") as f:
             return json.load(f)
     except Exception as exc:
         logger.error("Ошибка чтения proxies/users.json: %s", exc)
-        return {"vip_users": [], "default": [], "vip": []}
+        return []
 
 
 def _parse_link(link: str):
@@ -181,18 +181,17 @@ def _get_bot_proxy():
     Определяет прокси для собственного подключения бота к Telegram API.
     Приоритет:
       1. Переменная окружения BOT_PROXY_URL (явное переопределение)
-      2. Первый SOCKS5-прокси из списка default в proxies/users.json
+      2. Первый SOCKS5-прокси из proxies/users.json
     """
     env_val = os.environ.get("BOT_PROXY_URL", "").strip()
     if env_val:
         logger.info("Бот использует прокси из BOT_PROXY_URL: %s", env_val)
         return env_val
 
-    config = _load_proxies()
-    for link in config.get("default", []):
+    for link in _load_proxies():
         url = _link_to_socks5_url(link)
         if url:
-            logger.info("Бот использует прокси из списка default: %s", url)
+            logger.info("Бот использует прокси из списка: %s", url)
             return url
 
     logger.warning(
@@ -202,29 +201,14 @@ def _get_bot_proxy():
     return None
 
 
-def _next_proxy(username):
-    """
-    Выбирает следующий прокси по round-robin с учётом VIP-статуса.
-    Возвращает ссылку как есть (https://t.me/socks?...).
-    """
-    config = _load_proxies()
-    vip_users = [u.lstrip("@").lower() for u in config.get("vip_users", [])]
-    uname_norm = (username or "").lstrip("@").lower()
-
-    is_vip = bool(uname_norm and uname_norm in vip_users)
-
-    if is_vip and config.get("vip"):
-        pool = config["vip"]
-        key = "vip"
-    elif config.get("default"):
-        pool = config["default"]
-        key = "default"
-    else:
+def _next_proxy():
+    """Выбирает следующий прокси по round-robin. Возвращает ссылку как есть."""
+    global _proxy_index
+    pool = _load_proxies()
+    if not pool:
         return None
-
-    idx = _proxy_indices[key] % len(pool)
-    proxy = pool[idx]
-    _proxy_indices[key] = (idx + 1) % len(pool)
+    proxy = pool[_proxy_index % len(pool)]
+    _proxy_index = (_proxy_index + 1) % len(pool)
     return proxy
 
 
@@ -233,7 +217,7 @@ def _issue_proxy(user_id: int, username):
     Выдаёт следующий прокси пользователю, сохраняет в JSON.
     Возвращает (ссылка_или_None, номер_запроса).
     """
-    proxy = _next_proxy(username)
+    proxy = _next_proxy()
     user = _get_user(user_id)
     count = user["proxy_count"] + 1
 
