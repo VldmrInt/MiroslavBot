@@ -4,8 +4,9 @@
 
 ## Возможности
 
-- Выдача прокси прямыми ссылками (`https://t.me/socks?...`) — подключение в один клик
-- Равномерное распределение (round-robin) по общему пулу прокси
+- Выдача прокси прямыми ссылками (`https://t.me/socks?...`, `https://t.me/proxy?...`) — подключение в один клик
+- Автоматическая проверка доступности всех прокси при запуске и каждые 5 минут
+- Раздача только рабочих прокси, отсортированных по задержке (round-robin)
 - Автоматическое использование SOCKS5-прокси для собственного подключения к Telegram API (работает при блокировке в РФ)
 - Подсказки для пользователей: инструкция по настройке и проверка статуса
 - Логирование всех запросов
@@ -42,12 +43,16 @@ python bot.py
 ]
 ```
 
-Файл — просто массив ссылок. Прокси раздаются по кругу (round-robin).
+Файл — просто массив ссылок. При каждой проверке мёртвые прокси исключаются, живые сортируются по задержке. Пользователи получают только рабочие прокси по round-robin.
 
 ### Поддерживаемые форматы ссылок
 
-- **SOCKS5:** `https://t.me/socks?server=HOST&port=PORT&user=USER&pass=PASS`
-- **MTProto:** `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET`
+| Тип | Формат |
+|-----|--------|
+| SOCKS5 | `https://t.me/socks?server=HOST&port=PORT&user=USER&pass=PASS` |
+| SOCKS5 | `tg://socks?server=HOST&port=PORT&user=USER&pass=PASS` |
+| MTProto | `https://t.me/proxy?server=HOST&port=PORT&secret=SECRET` |
+| MTProto | `tg://proxy?server=HOST&port=PORT&secret=SECRET` |
 
 ## Прокси для самого бота
 
