@@ -475,25 +475,48 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Рассылка сообщения всем пользователям бота (только для администратора)."""
     user = update.effective_user
+    logger.info(
+        "cmd_broadcast called: user=%s id=%s chat_id=%s args=%s",
+        user.username or "N/A",
+        user.id,
+        update.effective_chat.id if update.effective_chat else "N/A",
+        context.args,
+    )
+
+    # effective_message covers both regular messages and edited/channel posts;
+    # falls back to update.message; may be None for non-message updates.
+    reply_target = update.effective_message or update.message
 
     # Проверка прав администратора
     if _ADMIN_ID is None or user.id != _ADMIN_ID:
-        await update.message.reply_text("⛔ У вас нет прав для этой команды.")
+        if reply_target:
+            await reply_target.reply_text("⛔ У вас нет прав для этой команды.")
+        logger.warning(
+            "cmd_broadcast denied for user=%s id=%d admin_id=%s",
+            user.username or "N/A", user.id, _ADMIN_ID,
+        )
         return
 
     # Получаем текст сообщения (всё, что идёт после /broadcast)
     text = " ".join(context.args).strip() if context.args else ""
     if not text:
-        await update.message.reply_text(
-            "ℹ️ Укажите текст сообщения после команды\\.\n"
-            "Пример: `/broadcast Привет всем\\!`",
-            parse_mode="MarkdownV2",
+        if reply_target:
+            await reply_target.reply_text(
+                "ℹ️ Укажите текст сообщения после команды\\.\n"
+                "Пример: `/broadcast Привет всем\\!`",
+                parse_mode="MarkdownV2",
+            )
+        logger.warning(
+            "cmd_broadcast called without text by user=%s id=%d",
+            user.username or "N/A", user.id,
         )
         return
 
     users = _load_users()
     if not users:
-        await update.message.reply_text("📭 Список пользователей пуст.")
+        if reply_target:
+            await reply_target.reply_text("📭 Список пользователей пуст.")
+        logger.info("cmd_broadcast: users list is empty")
         return
 
     sent = 0
@@ -511,12 +534,13 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         # Небольшая пауза, чтобы не превысить лимиты Telegram API (~30 сообщ./сек)
         await asyncio.sleep(0.05)
 
-    await update.message.reply_text(
-        f"✅ Рассылка завершена\\.\n"
-        f"Отправлено: *{sent}*\n"
-        f"Ошибок: *{failed}*",
-        parse_mode="MarkdownV2",
-    )
+    if reply_target:
+        await reply_target.reply_text(
+            f"✅ Рассылка завершена\\.\n"
+            f"Отправлено: *{sent}*\n"
+            f"Ошибок: *{failed}*",
+            parse_mode="MarkdownV2",
+        )
     logger.info(
         "Рассылка завершена: отправлено=%d, ошибок=%d (инициатор: %s id=%d)",
         sent, failed, user.username or "N/A", user.id,
