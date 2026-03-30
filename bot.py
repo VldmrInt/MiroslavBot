@@ -23,7 +23,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.error import NetworkError, TimedOut
+from telegram.error import Forbidden, NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -58,6 +58,16 @@ DATA_DIR = "/app/data" if _IN_DOCKER else "./data"
 PROXIES_FILE = "/app/proxies/users.json" if _IN_DOCKER else "./proxies/users.json"
 USERS_FILE = os.path.join(DATA_DIR, "users.json")
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# ID администратора — читается из переменной окружения ADMIN_ID.
+# Только этот пользователь может использовать /broadcast.
+_ADMIN_ID: int | None = None
+_raw_admin = os.environ.get("ADMIN_ID", "").strip()
+if _raw_admin:
+    try:
+        _ADMIN_ID = int(_raw_admin)
+    except ValueError:
+        logger.error("ADMIN_ID задан некорректно: '%s' — ожидается целое число", _raw_admin)
 
 # ---------------------------------------------------------------------------
 # Состояние прокси (в памяти; сбрасывается при рестарте)
@@ -462,6 +472,57 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             parse_mode="MarkdownV2",
         )
 
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Рассылка сообщения всем пользователям бота (только для администратора)."""
+    user = update.effective_user
+
+    # Проверка прав администратора
+    if _ADMIN_ID is None or user.id != _ADMIN_ID:
+        await update.message.reply_text("⛔ У вас нет прав для этой команды.")
+        return
+
+    # Получаем текст сообщения (всё, что идёт после /broadcast)
+    text = " ".join(context.args).strip() if context.args else ""
+    if not text:
+        await update.message.reply_text(
+            "ℹ️ Укажите текст сообщения после команды\\.\n"
+            "Пример: `/broadcast Привет всем\\!`",
+            parse_mode="MarkdownV2",
+        )
+        return
+
+    users = _load_users()
+    if not users:
+        await update.message.reply_text("📭 Список пользователей пуст.")
+        return
+
+    sent = 0
+    failed = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=int(uid), text=text)
+            sent += 1
+        except Forbidden:
+            # Пользователь заблокировал бота
+            failed += 1
+        except Exception as exc:
+            logger.warning("Не удалось отправить сообщение пользователю %s: %s", uid, exc)
+            failed += 1
+        # Небольшая пауза, чтобы не превысить лимиты Telegram API (~30 сообщ./сек)
+        await asyncio.sleep(0.05)
+
+    await update.message.reply_text(
+        f"✅ Рассылка завершена\\.\n"
+        f"Отправлено: *{sent}*\n"
+        f"Ошибок: *{failed}*",
+        parse_mode="MarkdownV2",
+    )
+    logger.info(
+        "Рассылка завершена: отправлено=%d, ошибок=%d (инициатор: %s id=%d)",
+        sent, failed, user.username or "N/A", user.id,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Точка входа
 # ---------------------------------------------------------------------------
@@ -494,6 +555,7 @@ def main() -> None:
     app = builder.build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("proxy", cmd_proxy))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
 
